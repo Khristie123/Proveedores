@@ -10,7 +10,7 @@ def consultar_ruc():
     driver = None
     try:
         # Leer archivo Excel
-        excel_path = r"COPIAR_RUTA_DE_ACCESO_ARCHIVO_EXCEL_PROVEEDORES"
+        excel_path = r"C:\Users\User\Downloads\EXPORT _ VA.XLSX"
 
         proveedores_df = pd.read_excel(excel_path)
         proveedores_df.columns = proveedores_df.columns.str.strip().str.upper()
@@ -32,7 +32,7 @@ def consultar_ruc():
         driver = webdriver.Chrome(options=options)
         print("Abriendo el navegador...")
 
-        driver.set_page_load_timeout(20) 
+        driver.set_page_load_timeout(30) 
 
         resultados = []
         for idx, ruc in enumerate(ruc20_lista, start=1):
@@ -58,7 +58,7 @@ def consultar_ruc():
             estado_contribuyente = driver.find_element(By.XPATH, "//h4[contains(text(),'Estado del Contribuyente:')]/ancestor::div/following-sibling::div/*").text
             condicion_contribuyente = driver.find_element(By.XPATH, "//h4[contains(text(),'Condición del Contribuyente:')]/ancestor::div/following-sibling::div/*").text
             domicilio_fiscal = driver.find_element(By.XPATH, "//h4[contains(text(),'Domicilio Fiscal:')]/ancestor::div/following-sibling::div/*").text
-            distrito = domicilio_fiscal.split("-", 1)[-1]
+            distrito = domicilio_fiscal.rsplit("-", 1)[-1].strip()
             razonsoc = driver.find_element(By.XPATH, "//h4[contains(text(),'Número de RUC:')]/ancestor::div/following-sibling::div/*").text
             razon_social = razonsoc.split("-", 1)[-1]
 
@@ -72,7 +72,7 @@ def consultar_ruc():
             deuda_data = obtener_deuda_coactiva(driver)
 
             print("Razón Social:", razon_social)
-            print("Dirección:", domicilio_fiscal)
+            print("Dirección:", distrito)
             print("Deuda coactiva:", deuda_data)
 
             for periodo, deuda in deuda_data:
@@ -83,7 +83,7 @@ def consultar_ruc():
                     "Razón Social": razon_social,
                     "F.INSCRIPCION": fecha_inscripcion,
                     "F.INICIO ACTIV.": fecha_inicio_actividades,
-                    "Dirección": domicilio_fiscal,
+                    "Dirección": distrito,
                     "Deuda Coactiva": deuda,
                     "Periodo Tributario": periodo,
                     "Cantidad Trabajadores": cantidad_trabajadores,
@@ -158,7 +158,7 @@ def obtener_deuda_coactiva(driver):
             return resultados if resultados else [(0, 0)]  # Si no hay filas, devuelve 0,0
 
         except TimeoutException:
-            resultados = [(0, "")]
+            resultados = [("", 0)]
             return resultados  # No hay tabla = sin deuda
 
     except TimeoutException:
