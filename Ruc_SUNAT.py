@@ -10,7 +10,7 @@ def consultar_ruc():
     driver = None
     try:
         # Leer archivo Excel
-        excel_path = r"C:\Users\User\Downloads\EXPORT _ VA.XLSX"
+        excel_path = r"COPIAR RUTA DE EXCEL AQUI"
 
         proveedores_df = pd.read_excel(excel_path)
         proveedores_df.columns = proveedores_df.columns.str.strip().str.upper()
