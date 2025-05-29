@@ -14,6 +14,8 @@ from multiprocessing import Process, cpu_count
 from datetime import datetime
 import os
 from multiprocessing import Manager
+import re
+from bs4 import BeautifulSoup, Tag, NavigableString
 
 def dividir_lista(lista, n):
     """Divide una lista en 'n' partes aproximadamente iguales."""
@@ -51,8 +53,8 @@ def ejecutar_scraping(ruc_lista_parcial, idx_proceso, dict_dataframes):
                 input_ruc = driver.find_element(By.NAME, "search1")
                 input_ruc.clear()
                 input_ruc.send_keys(str(ruc))
-                print(f"[{idx}]Buscando RUC: ", ruc)
                 driver.find_element(By.ID, "btnAceptar").click()
+                print(f"[{idx}]Buscando RUC: ", ruc)
                 # Esperar a que cargue la página
                 wait.until(EC.presence_of_element_located((By.XPATH, "//h4[contains(text(),'Fecha de Inscripción:')]")))
                 time.sleep(1)
@@ -68,7 +70,21 @@ def ejecutar_scraping(ruc_lista_parcial, idx_proceso, dict_dataframes):
                         if contenedor:
                             siguiente_div = contenedor.find_next_sibling("div")
                             if siguiente_div:
-                                valor = siguiente_div.get_text(strip=True)
+                                # Buscar un <br> dentro de siguiente_div
+                                p = siguiente_div.find("p")
+                                if p:
+                                    texto = ""
+                                    for elem in p.children:
+                                        if isinstance(elem, Tag) and elem.name == "br":
+                                            break
+                                        if isinstance(elem, NavigableString):
+                                            texto += elem.strip() + " "
+                                        elif isinstance(elem, Tag):
+                                            texto += elem.get_text(strip=True) + " "
+                                    valor = texto.strip()
+                                else:
+                                    # Si no hay <br>, obtener todo el texto normalmente
+                                    valor = siguiente_div.get_text(strip=True)
                                 return valor
                     return ""
                 # Extraer datos
@@ -82,13 +98,13 @@ def ejecutar_scraping(ruc_lista_parcial, idx_proceso, dict_dataframes):
                 razon_social = razonsoc.split("-", 1)[-1] if "-" in razonsoc else razonsoc
 
                 # Llamar a funciones adicionales
-                datos_adicionales = obtener_representante_legal(driver)
+                deuda_data = obtener_deuda_coactiva(driver)
                 driver.back()
                 time.sleep(1)
                 cantidad_trabajadores = obtener_cantidad_trabajadores(driver)
                 driver.back()
                 time.sleep(1)
-                deuda_data = obtener_deuda_coactiva(driver)
+                datos_adicionales = obtener_representante_legal(driver)
 
                 # Guardar resultados
                 for periodo, deuda in deuda_data:
@@ -143,55 +159,69 @@ def obtener_representante_legal(driver):
         boton_formulario = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//form[@name='formRepLeg']//button")))
         boton_formulario.click()
         nuevo_contenido = ""
-
-        WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(),'REPRESENTANTES LEGALES')]")))
-        try: # Extraer los nuevos datos
-            WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.XPATH, "//table"))
-                )
-            nuevo_contenido = driver.find_element(By.XPATH, "//table//tbody//tr[position() = 1]/td[3]").text
-
+        time.sleep(1)  # Esperar un momento para que se cargue el contenido
+        if driver.find_elements(By.XPATH, "//*[contains(text(), 'The requested URL was rejected. Please consult with your administrator.')]"):
+             # Si aparece este mensaje, no continuar
+            nuevo_contenido = "No se pudo extraer el dato"
+            print("Se detectó un mensaje alternativo. Proceso interrumpido.")
             return nuevo_contenido
+        try:
+            WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(),'REPRESENTANTES LEGALES')]")))
+        # Extraer los nuevos datos
+            try:
+                    WebDriverWait(driver, 8).until(
+                                EC.presence_of_element_located((By.XPATH, "//table")) )
+                    nuevo_contenido = driver.find_element(By.XPATH, "//table//tbody//tr[position() = 1]/td[3]").text
+
+                    return nuevo_contenido
+            except TimeoutException:
+                    nuevo_contenido = "-"
+                    return nuevo_contenido
         except TimeoutException:
+            print("El contenido no se cargó en el tiempo esperado")
             nuevo_contenido = ""
             return nuevo_contenido
 
     except TimeoutException:
-        print("El botón representante legal no fue clickeable o el contenido no se cargó en el tiempo esperado.")
-        nuevo_contenido = "No se pudo extraer el dato"
+        print("El botón representante legal no fue clickeable.")
+        nuevo_contenido = "-"
         return nuevo_contenido
     
 def obtener_deuda_coactiva(driver):
     try:
-        WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.NAME, "formInfoDeudaCoactiva")))
-        boton_formulario = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//form[@name='formInfoDeudaCoactiva']//button")))
-        boton_formulario.click()
-        
-        WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.XPATH, "//h3[contains(text(),'DEUDA COACTIVA REMITIDA')]")))
-        # Esperar tabla
-        try:
-            resultados = []
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, "//table//tbody"))
-            )
-            cuerpo_tabla = driver.find_element(By.XPATH, "//table//tbody")
-            filas = cuerpo_tabla.find_elements(By.TAG_NAME, "tr")
+            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.NAME, "formInfoDeudaCoactiva")))
+            boton_formulario = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//form[@name='formInfoDeudaCoactiva']//button")))
+            boton_formulario.click()
+            try:
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//h3[contains(text(),'DEUDA COACTIVA REMITIDA')]")))
+                # Esperar tabla
+                try:
+                    resultados = []
+                    WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, "//table//tbody"))
+                    )
+                    cuerpo_tabla = driver.find_element(By.XPATH, "//table//tbody")
+                    filas = cuerpo_tabla.find_elements(By.TAG_NAME, "tr")
 
-            for fila in filas:
-                columnas = fila.find_elements(By.TAG_NAME, "td")
-                if len(columnas) >= 2:
-                    deuda = columnas[0].text.strip()
-                    periodo = columnas[1].text.strip()
-                    resultados.append((periodo, deuda))
+                    for fila in filas:
+                        columnas = fila.find_elements(By.TAG_NAME, "td")
+                        if len(columnas) >= 2:
+                            deuda = columnas[0].text.strip()
+                            periodo = columnas[1].text.strip()
+                            resultados.append((periodo, deuda))
 
-            return resultados if resultados else [(0, 0)]
+                    return resultados if resultados else [(0, 0)]
+                except TimeoutException:
+                    resultados = [("", "-")]
+                    return resultados
 
-        except TimeoutException:
-            resultados = [("", 0)]
-            return resultados 
+            except TimeoutException:
+                print("el contenido no se cargó en el tiempo esperado")
+                resultados = [("", 0)]
+                return resultados 
 
     except TimeoutException:
-        print("El botón deuda coactiva no fue clickeable o el contenido no se cargó en el tiempo esperado.")
+        print("El botón deuda coactiva no fue clickeable.")
         resultados = [("No se pudo extraer el dato", "No se pudo extraer el dato")]
         return resultados
     
@@ -202,19 +232,30 @@ def obtener_cantidad_trabajadores(driver):
         boton_formulario = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, "//form[@name='formNumTrabajd']//button")))
         boton_formulario.click()
         nuevo_contenido = ""
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, "//h3[contains(text(),'CANTIDAD DE TRABAJADORES')]")))
-        # Esperando a que la tabla aparezca
-        try:
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//table")))
-            nuevo_contenido = driver.find_element(By.XPATH, "//table//tbody//tr[last()]/td[2]").text
+        time.sleep(1)  # Esperar un momento para que se cargue el contenido
+        if driver.find_elements(By.XPATH, "//*[contains(text(), 'The requested URL was rejected. Please consult with your administrator.')]"):
+            # Si aparece este mensaje, no continuar
+            nuevo_contenido = "No se pudo extraer el dato"
+            print("Se detectó un mensaje alternativo. Proceso interrumpido.")
             return nuevo_contenido
+        try:    
+            WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, "//h3[contains(text(),'CANTIDAD DE TRABAJADORES')]")))
+            # Esperando a que la tabla aparezca
+            try:
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//table")))
+                nuevo_contenido = driver.find_element(By.XPATH, "//table//tbody//tr[last()]/td[2]").text
+                return nuevo_contenido
+            except TimeoutException:
+                nuevo_contenido = "-"
+                return nuevo_contenido
         except TimeoutException:
-            nuevo_contenido = "No se encontró la cantidad de trabajadores"
+            print("El contenido no se cargó en el tiempo esperado")
+            nuevo_contenido = ""
             return nuevo_contenido
 
     except TimeoutException:
-        print("El botón cantidad de trabajadores no fue clickeable o el contenido no se cargó en el tiempo esperado.")
-        nuevo_contenido = "No se pudo extraer el dato"
+        print("El botón cantidad de trabajadores no fue clickeable.")
+        nuevo_contenido = "-"
         return nuevo_contenido 
 
 # Función para unir todos los archivos Excel en uno solo
@@ -268,25 +309,61 @@ def main():
 
     print(f"Usando hasta {num_procesos} procesos en paralelo.")
     # Cargar archivo Excel (cambia esta ruta)
-    excel_path = r"COPIAR RUTA DE ACCESO EXCEL"  # <-- CAMBIAR AQUÍ
-    proveedores_df = pd.read_excel(excel_path)
+    #excel_path = r"COPIAR RUTA DE ACCESO EXCEL"  # <-- CAMBIAR AQUÍ
+    try:
+        ruta_input = input("Ingrese la ruta del archivo Excel con los RUCs: ")
+        excel_path = ruta_input.strip('"').strip("'")
+        if not os.path.exists(excel_path):
+            print(f"[Main] Error: El archivo '{excel_path}' no existe. Por favor, verifica la ruta.")
+            return
+        
+        hojas = pd.ExcelFile(excel_path).sheet_names
+        print("\nHojas disponibles:")
+        for i, hoja in enumerate(hojas):
+            print(f"{i + 1}. {hoja}")
+        hoja_seleccionada = input("\nSeleccione el número de la hoja que contiene los RUCs: ")
+        try:
+            hoja_seleccionada = int(hoja_seleccionada) - 1
+            if hoja_seleccionada < 0 or hoja_seleccionada >= len(hojas):
+                print("[Main] Error: Número de hoja inválido.")
+                return
+            print(f"[Main] Cargando datos de la hoja: {hojas[hoja_seleccionada]}")
+        except ValueError:
+            print("[Main] Error: Entrada no válida. Debe ser un número.")
+            return
+        proveedores_df = pd.read_excel(excel_path, sheet_name=hojas[hoja_seleccionada])
 
-    # Normalizar nombres de columna y seleccionar columna de RUC
-    proveedores_df.columns = proveedores_df.columns.str.strip().str.upper()
-    proveedores_df = proveedores_df.rename(columns={proveedores_df.columns[21]: 'RUC'})
+        # Normalizar nombres de columna y seleccionar columna de RUC
+        proveedores_df.columns = proveedores_df.columns.map(str).str.strip().str.upper()
+            # Mostrar las columnas disponibles
+        print("\nColumnas disponibles:")
+        for i, col in enumerate(proveedores_df.columns, start=1):
+            print(f"{i}. {col}")
 
-    # Filtrar RUCs válidos que empiecen con "20", eliminar duplicados
-    ruc20_lista = proveedores_df[proveedores_df['RUC'].astype(str).str.startswith("20")]['RUC']
-    ruc20_lista = ruc20_lista.dropna().astype(int).unique()
-    print(len(ruc20_lista), "RUCs encontrados que empiezan con '20'.")
+        while True:
+            try:
+                seleccion = int(input("\nIngresa el número de la columna que quieres seleccionar: "))
+                if 1 <= seleccion <= len(proveedores_df.columns):
+                    columna_seleccionada = proveedores_df.columns[seleccion - 1]
+                    print(f"Has seleccionado la columna: {columna_seleccionada}")
+                    break
+                else:
+                    print(f"Por favor, ingresa un número entre 1 y {len(proveedores_df.columns)}.")
+            except ValueError:
+                print("Entrada inválida. Debes ingresar un número entero.")
 
-    # Dividir la lista de RUCs para paralelizar
-    lotes = dividir_lista(list(ruc20_lista), num_procesos)
-    print(len(lotes), "lotes de RUCs creados para procesamiento paralelo.")
-    manager = multiprocessing.Manager()
-    dict_dataframes = manager.dict()
-    print(dict_dataframes)
-    procesos = []
+        ruc_lista = proveedores_df[proveedores_df[columna_seleccionada].notna()][columna_seleccionada].astype(str)
+        ruc_lista = ruc_lista.dropna().astype(float).astype(int).unique()
+        # Dividir la lista de RUCs para paralelizar
+        lotes = dividir_lista(list(ruc_lista), num_procesos)
+        print(len(lotes), "lotes de RUCs creados para procesamiento paralelo.")
+        manager = multiprocessing.Manager()
+        dict_dataframes = manager.dict()
+        print(dict_dataframes)
+        procesos = []
+    except KeyboardInterrupt:
+        print("\nProceso interrumpido por el usuario. Saliendo...")
+        return  # o sys.exit() para terminar el programa sin error
     # Lanzar procesos de scraping
     try:
 
